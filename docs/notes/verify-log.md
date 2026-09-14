@@ -1532,3 +1532,76 @@ five-and-five onto skeletons 0 and 1, and both capybaras render as solid
 meshes in PCSX2 with the shadow intact. Cost: two characters of one rig now
 cost two skeletons and two mesh sets rather than one; kMaxSkinnedMeshes (24)
 and the per-mesh batch ceiling (256) both hold.
+
+## TextMeshPro and baked lighting (ADR-013, ADR-014, 2026-09-14)
+
+Two features asked for together, both landing on machinery that already
+existed. TextMeshPro text rides the baked-font UI path: a TMP font asset is
+resolved to its source TTF at export, Unity's rasteriser bakes it at the
+component's size and style, and the console draws it as a Text with managed
+kind 3 so the shim instantiates `TMPro.TextMeshProUGUI`. Baked lighting is
+the plan's own suggestion made real: with the profile's Lighting set to
+Baked, every lightmapped renderer's vertices take their lightmap colour at
+export and the runtime adds no light to them.
+
+Verified, in order. Host: the full suite, including the baked material flag
+and a TMP element that realigns at runtime. The shim: a user-style script
+using `TextMeshProUGUI`, `SetText`, `alignment`, the folded alignment enums
+and `Text.alignment` compiles against `PS2.UnityShim`, and the tag
+stripper turns `<b>PRESS</b> <color=#ff0>START</color>` into `PRESS START`
+while leaving `a < b and c > d` alone. Unity, in batch mode:
+`ExportTmpScene` builds a canvas with a bold 40 px TMP title and an italic
+22 px Text and exports it; `ExportBakedLightScene` saves a wall-and-floor
+scene, bakes it with the progressive CPU lightmapper in ten seconds,
+exports it in baked mode (2 renderers, 14,208 vertex colours from one
+lightmap) and, with `-ps2RealtimeOutput`, exports the same scene realtime
+for comparison. On target, through the scene-debug sample, whose new
+luminance map prints the frame as 32 x 14 cells in the log: the baked
+export shows the wall's shadow as a dark band across the floor and the
+wall's near face lit by bounce, the realtime twin shows a flat floor and
+no shadow, and the dynamic sphere shades in realtime in both. The TMP
+scene draws the title in the baked bold proportional font, centred, markup
+gone, with the italic caption under it. All five image goldens pass, and
+the test project's full pipeline build boots to GAME_OK.
+
+Three things went wrong on the way. `LightmapEncodingQuality` is an
+internal enum in Unity 6, so the encoding (HDR, RGBM or dLDR) is read
+through reflection with the lightmap's texture format as the fallback.
+The font-baking loop selected text by the uGUI managed kind and skipped
+TMP elements entirely, which showed on target as the title in the builtin
+8x8 font beside a correctly baked caption; it selects by draw kind now.
+And `TMP_FontAsset.CreateFontAsset` refuses Unity's builtin font ("Include
+Font Data"), so the batch scene exercises the default-font fallback rather
+than the GUID resolution; that path is the same code every static TMP
+asset takes, and the essentials package that ships with TMP carries the
+LiberationSans TTF the default asset's GUID names. The scene-debug sample
+also never enabled the UI pass, so the first TMP run drew nothing at all:
+it calls `init_ui` now.
+
+The work landed on top of M14, which had reached the repository first and
+had already answered one of the same questions: the scene's ambient now
+travels in the camera payload and `ps2ur_scene_set_ambient`, so the
+light-payload extension written here was dropped in the merge, and the
+baked material flag moved from bit3 to bit5 because M14 had taken bits 3
+and 4 for clamp addressing and the sky. A baked renderer also opts out of
+M14's static batching, since a merged mesh would lose its per-instance
+colours. Everything above was re-verified on the merged tree.
+
+Lessons. A bake-time property that a script cannot set is better absent
+from the shim than present and lying; the compile error names it. A
+luminance map in the log is worth more than a token for anything visual:
+"shadow present" is now a line a CI can grep. And fetch before a long
+piece of work, not after: two of the three merge conflicts were the same
+idea implemented twice.
+
+Two things the merged tree inherited from M14 rather than from this work,
+recorded so nobody hunts for them here. `RenderQueue.OpaqueSortsFrontToBack
+TransparentBackToFront` failed on the untouched remote tip: M14 renumbered
+the passes (0 sky, 1 opaque, 2 transparent) and the test still pushed with
+the old numbers, so the test now uses the new ones; the queue code is as
+M14 left it. And the image goldens for 02-scene-graph, 16-fog and
+17-skinning differ from their 2026-09-08 captures in exactly the tiles the
+lit objects occupy, while 01 and 15 still match; the only renderer change
+here is a branch taken by materials carrying the baked flag, which none of
+those scenes carry, so the difference is M14's per-object lighting and is
+left for its author to confirm and regenerate.

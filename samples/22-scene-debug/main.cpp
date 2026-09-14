@@ -197,6 +197,11 @@ int main(void)
     device.vram().log_budget();
 
     scene::SceneRenderer renderer;
+    // The uGUI pass, so a scene's canvas (Text, TextMeshProUGUI, images)
+    // draws over the frame the way the game draws it (ADR-013 check).
+    if (!renderer.init_ui(device)) {
+        printf("[22-scene-debug] ui overlay init failed; the canvas will not draw\n");
+    }
     scene::RendererPrograms programs;
     BindContext bind_ctx{&device, textures, tex_count < 64u ? tex_count : 64u};
 
@@ -286,6 +291,28 @@ int main(void)
             close(fd);
             printf("[22-scene-debug] frame written to debugframe.bin "
                    "(512x448 RGBA)\n");
+        }
+        // A luminance map of the frame in the LOG, 32 x 14 cells of 16 x 32
+        // pixels, so a baked shadow or a lit wall can be read off a CI log
+        // without opening the frame dump (ADR-014's acceptance).
+        static const char kRamp[] = " .:-=+*#%@";
+        for (uint32_t row = 0; row < 14u; ++row) {
+            char line[33];
+            for (uint32_t col = 0; col < 32u; ++col) {
+                uint32_t sum = 0;
+                for (uint32_t y = 0; y < 32u; ++y) {
+                    const uint8_t* px =
+                        g_frame + ((row * 32u + y) * 512u + col * 16u) * 4u;
+                    for (uint32_t x = 0; x < 16u; ++x) {
+                        sum += (77u * px[x * 4u + 0u] + 150u * px[x * 4u + 1u] +
+                                29u * px[x * 4u + 2u]) >> 8;
+                    }
+                }
+                const uint32_t avg = sum / (16u * 32u);
+                line[col] = kRamp[(avg * 9u) / 255u];
+            }
+            line[32] = '\0';
+            printf("PS2UR_LUMA %02u |%s|\n", static_cast<unsigned>(row), line);
         }
     }
 

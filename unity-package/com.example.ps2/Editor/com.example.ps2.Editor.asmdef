@@ -3,7 +3,8 @@
     "rootNamespace": "Ps2.Editor",
     "references": [
         "com.example.ps2.Runtime",
-        "UnityEngine.UI"
+        "UnityEngine.UI",
+        "Unity.TextMeshPro"
     ],
     "includePlatforms": [
         "Editor"
@@ -14,6 +15,17 @@
     "precompiledReferences": [],
     "autoReferenced": true,
     "defineConstraints": [],
-    "versionDefines": [],
+    "versionDefines": [
+        {
+            "name": "com.unity.ugui",
+            "expression": "2.0.0",
+            "define": "PS2_HAS_TMP"
+        },
+        {
+            "name": "com.unity.textmeshpro",
+            "expression": "1.0.0",
+            "define": "PS2_HAS_TMP"
+        }
+    ],
     "noEngineReferences": false
 }

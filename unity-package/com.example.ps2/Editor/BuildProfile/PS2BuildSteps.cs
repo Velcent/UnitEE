@@ -132,6 +132,8 @@ namespace Ps2.Editor
                         ? P2bTextureExporter.FormatMode.EightBit
                         : P2bTextureExporter.FormatMode.Auto;
             P2bSceneExporter.AudioSampleRate = ctx.Profile.audioSampleRate;
+            P2bSceneExporter.LightingMode = (int)ctx.Profile.lighting;
+            P2bSceneExporter.BakedVertexSpacing = ctx.Profile.bakedVertexSpacing;
             foreach (string scenePath in ctx.ScenePaths)
             {
                 string output = OutputFor(ctx, scenePath);

@@ -1614,6 +1614,38 @@
           "type": "i32"
         }
       ]
+    },
+    {
+      "name": "ps2ur_ui_set_align",
+      "cs_class": "UnityEngine.Internal.Native",
+      "doc": "Text.alignment / TMP_Text.alignment: 0 left/top, 1 centre/middle, 2 right/bottom. Applied per line at draw time.",
+      "returns": "void",
+      "params": [
+        {
+          "name": "element",
+          "type": "i32"
+        },
+        {
+          "name": "align_h",
+          "type": "i32"
+        },
+        {
+          "name": "align_v",
+          "type": "i32"
+        }
+      ]
+    },
+    {
+      "name": "ps2ur_ui_get_align",
+      "cs_class": "UnityEngine.Internal.Native",
+      "doc": "The authored alignment of an element: align_h | (align_v << 8), so a graphic's managed view starts from what the exporter baked.",
+      "returns": "u32",
+      "params": [
+        {
+          "name": "element",
+          "type": "i32"
+        }
+      ]
     }
   ]
 }

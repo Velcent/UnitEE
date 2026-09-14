@@ -25,6 +25,19 @@ namespace Ps2.Editor
         public const uint KindVertexLitFog = 6; // lit layout + per-vertex F (M8)
         public const uint KindSkinned = 7;      // vu_skin palette (M9)
 
+        // MATL flags bit5 (ADR-014): the vertex colours ARE the lighting.
+        // (bit3 and bit4 are M14's clamp addressing and sky.)
+        public const uint MaterialFlagBaked = 32;
+
+        // Baked lighting for one renderer (ADR-014): how each vertex's
+        // lightmap UV becomes its colour, and whether those bytes are GS
+        // modulate units (textured layouts, 128 = 1.0) or plain 0..255.
+        internal sealed class BakedShading
+        {
+            public System.Func<Vector2, Color32> Shade;
+            public bool GsUnits;
+        }
+
         // Vertex layout selectors: the new kinds reuse the M4/M5 layouts.
         public static bool UsesLitLayout(uint kind) =>
             kind == KindVertexLit || kind == KindLitAlpha || kind == KindCutout ||
@@ -71,6 +84,7 @@ namespace Ps2.Editor
         {
             public Vector3 P, N;
             public Vector2 T;
+            public Vector2 T2; // lightmap UV (uv2, or uv when there is none)
             public Color32 C;
         }
 
@@ -80,11 +94,13 @@ namespace Ps2.Editor
         public static System.Collections.Generic.List<byte[]> Export(
             Mesh mesh, uint kind, uint materialIndex, Color32 fallbackColour,
             float maxUserScale = 1f, int submesh = -1,
-            Vector3? userScaleAxes = null)
+            Vector3? userScaleAxes = null,
+            BakedShading shading = null, float bakedMaxEdge = 0f)
         {
             Vector3[] positions = mesh.vertices;
             Vector3[] normals = mesh.normals;
             Vector2[] uvs = mesh.uv;
+            Vector2[] uv2 = mesh.uv2;
             Color32[] colours = mesh.colors32;
             int[] indices = submesh >= 0 && submesh < mesh.subMeshCount
                                 ? mesh.GetTriangles(submesh)
@@ -103,6 +119,8 @@ namespace Ps2.Editor
                     N = normals.Length > src ? normals[src] : Vector3.up,
                     T = uvs.Length > src ? uvs[src] : Vector2.zero,
                     C = colours.Length > src ? colours[src] : fallbackColour,
+                    T2 = uv2.Length > src ? uv2[src]
+                             : (uvs.Length > src ? uvs[src] : Vector2.zero),
                 });
             }
             // Edges are measured in WORLD units: object-space lengths scaled
@@ -115,7 +133,27 @@ namespace Ps2.Editor
             axes = new Vector3(Mathf.Max(Mathf.Abs(axes.x), 0.0001f),
                                Mathf.Max(Mathf.Abs(axes.y), 0.0001f),
                                Mathf.Max(Mathf.Abs(axes.z), 0.0001f));
-            verts = Subdivide(verts, MaxTriangleEdgeWorld, axes);
+            float maxEdgeWorld = MaxTriangleEdgeWorld;
+            if (shading != null && bakedMaxEdge > 0f)
+            {
+                // Baked lighting lives on the vertices, so a lightmap's
+                // shadow edge survives only where there are vertices to
+                // hold it (ADR-014). The profile's spacing is world units.
+                maxEdgeWorld = Mathf.Min(maxEdgeWorld, bakedMaxEdge);
+            }
+            verts = Subdivide(verts, maxEdgeWorld, axes);
+            if (shading != null)
+            {
+                // Shade AFTER subdivision, at each vertex's own lightmap
+                // UV: a colour interpolated between two coarse corners
+                // would smear the very shadow the extra vertices exist for.
+                for (int i = 0; i < verts.Count; i++)
+                {
+                    Vert v = verts[i];
+                    v.C = shading.Shade(v.T2);
+                    verts[i] = v;
+                }
+            }
 
             int totalTris = verts.Count / 3;
             LastTriangles = Mathf.Min(totalTris, MaxTrisPerChunk * MaxChunks);
@@ -136,7 +174,8 @@ namespace Ps2.Editor
                 int firstTri = chunk * MaxTrisPerChunk;
                 int tris = Mathf.Min(MaxTrisPerChunk, totalTris - firstTri);
                 sections.Add(BuildSection(mesh, verts, firstTri * 3, tris * 3,
-                                          kind, materialIndex, fallbackColour));
+                                          kind, materialIndex, fallbackColour,
+                                          shading != null && shading.GsUnits));
             }
             return sections;
         }
@@ -144,7 +183,7 @@ namespace Ps2.Editor
         private static byte[] BuildSection(
             Mesh mesh, System.Collections.Generic.List<Vert> verts,
             int firstVert, int vertCount, uint kind, uint materialIndex,
-            Color32 fallbackColour)
+            Color32 fallbackColour, bool coloursInGsUnits)
         {
             int triVerts = vertCount;
             int maxPerBatch = UsesLitLayout(kind) ? MaxLitVertsPerBatch
@@ -243,7 +282,11 @@ namespace Ps2.Editor
                     // dark asphalt hid it since M5 (verify-log M12.5).
                     // Untextured layouts keep 0..255: there the vertex colour
                     // IS the final colour.
-                    float cscale = UsesTexLayout(kind) ? 128.0f / 255.0f : 1.0f;
+                    // Baked textured colours arrive ALREADY in GS units
+                    // (ADR-014): 128 is 1.0 and 255 is 2.0, the overbright
+                    // a sunlit lightmap texel legitimately carries.
+                    float cscale = UsesTexLayout(kind) && !coloursInGsUnits
+                                       ? 128.0f / 255.0f : 1.0f;
                     blobs.F32(c.r * cscale);
                     blobs.F32(c.g * cscale);
                     blobs.F32(c.b * cscale);
@@ -327,6 +370,7 @@ namespace Ps2.Editor
                 P = (a.P + b.P) * 0.5f,
                 N = (a.N + b.N).normalized,
                 T = (a.T + b.T) * 0.5f,
+                T2 = (a.T2 + b.T2) * 0.5f,
                 C = Color32.Lerp(a.C, b.C, 0.5f),
             };
         }

@@ -95,6 +95,8 @@ const Ps2urBridgeEntry ps2ur_bridge_table[] = {
     { "ps2ur_ui_set_text", reinterpret_cast<const void*>(&ps2ur_ui_set_text) },
     { "ps2ur_ui_set_text_glow", reinterpret_cast<const void*>(&ps2ur_ui_set_text_glow) },
     { "ps2ur_ui_set_visible", reinterpret_cast<const void*>(&ps2ur_ui_set_visible) },
+    { "ps2ur_ui_set_align", reinterpret_cast<const void*>(&ps2ur_ui_set_align) },
+    { "ps2ur_ui_get_align", reinterpret_cast<const void*>(&ps2ur_ui_get_align) },
 };
 
 const int ps2ur_bridge_table_count =

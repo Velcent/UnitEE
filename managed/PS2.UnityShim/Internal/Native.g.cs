@@ -358,5 +358,13 @@ namespace UnityEngine.Internal
         // Shows/hides an element; Behaviour.enabled on the managed graphics.
         [DllImport("__Internal")]
         internal static extern void ps2ur_ui_set_visible(int element, int visible);
+
+        // Text.alignment / TMP_Text.alignment: 0 left/top, 1 centre/middle, 2 right/bottom. Applied per line at draw time.
+        [DllImport("__Internal")]
+        internal static extern void ps2ur_ui_set_align(int element, int align_h, int align_v);
+
+        // The authored alignment of an element: align_h | (align_v << 8), so a graphic's managed view starts from what the exporter baked.
+        [DllImport("__Internal")]
+        internal static extern uint ps2ur_ui_get_align(int element);
     }
 }

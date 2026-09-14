@@ -106,6 +106,14 @@ inline constexpr uint32_t kMaterialAdditive = 5;  // transparent pass
 inline constexpr uint32_t kMaterialVertexLitFog = 6; // lit + per-vertex F (M8 task 7)
 inline constexpr uint32_t kMaterialSkinned = 7;      // vu_skin palette (M9)
 
+// MATL flags bit5 (ADR-014): the vertex colours already hold the scene's
+// baked lighting, sampled from Unity's lightmaps at export. A lit-layout
+// material with this bit runs the lit program with the lights off and
+// ambient at 1.0, so the colours pass through untouched and fog still
+// applies; textured baked materials carry the bit for the record only.
+// (bit3 and bit4 are M14's clamp and sky.)
+inline constexpr uint32_t kMaterialFlagBaked = 32u;
+
 struct LoadedMesh {
     uint32_t material_index = 0;
     uint32_t batch_count = 0;
@@ -129,6 +137,7 @@ struct LoadedMaterial {
     bool transparent = false; // render pass selection (back-to-front, no Z)
     bool clamp = false;       // M14: CLAMP_1 clamps both axes (sky faces)
     bool sky = false;         // M14: drawn first, before the opaque pass
+    bool baked = false;       // kMaterialFlagBaked: colours are the lighting
 };
 
 struct Entity {
@@ -476,6 +485,9 @@ public:
     void ui_set_colour(uint32_t i, uint32_t rgba);
     void ui_set_text(uint32_t i, const char* text);
     void ui_set_text_glow(uint32_t i, float spread, float intensity, float dilate);
+    // Text.alignment / TMP_Text.alignment at runtime: 0 left/top, 1
+    // centre/middle, 2 right/bottom, applied per line at draw time.
+    void ui_set_align(uint32_t i, uint32_t align_h, uint32_t align_v);
     void ui_set_visible(uint32_t i, bool visible);
 
     // Steps every playing system: emission, integration, expiry. Call with

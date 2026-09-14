@@ -55,6 +55,19 @@ namespace Ps2.Editor
     }
 
     /// <summary>Where Build and Run sends the result (plan 13.1 Deploy).</summary>
+    // How scene lighting reaches the console (ADR-014).
+    public enum PS2Lighting
+    {
+        // The directional light and the ambient term are evaluated per
+        // vertex on VU1 every frame, as before.
+        Realtime,
+        // Lightmapped renderers carry Unity's baked lighting (shadows,
+        // bounce, ambient occlusion) as vertex colours sampled from the
+        // lightmaps at export; everything else keeps realtime lighting.
+        // Generate Lighting in Unity first.
+        Baked,
+    }
+
     public enum PS2DeployTarget
     {
         Pcsx2,
@@ -167,6 +180,16 @@ namespace Ps2.Editor
 
         [Tooltip("Audio sample rate for exported SFX. 22050 is the plan baseline.")]
         public int audioSampleRate = 22050;
+
+        [Tooltip("Baked: lightmapped renderers carry Unity's baked lighting as " +
+                 "vertex colours sampled at export, at no runtime cost. Realtime: " +
+                 "one directional light and ambient per vertex on VU1 (ADR-014).")]
+        public PS2Lighting lighting = PS2Lighting.Realtime;
+
+        [Tooltip("Baked meshes are subdivided until no edge exceeds this many " +
+                 "world units, so lightmap shadows have vertices to land on. " +
+                 "Smaller is sharper and costs vertices; 0 disables it.")]
+        public float bakedVertexSpacing = 1.5f;
 
         [Tooltip("Treat content warnings (oversized or non-power-of-two textures) " +
                  "as errors instead of auto-resizing.")]

@@ -455,3 +455,39 @@ TEST(SceneUI, AdditiveLoadRebasesTheEntityAndTheSliderLink)
     EXPECT_EQ(world.ui_element(2).link, 3);
     EXPECT_EQ(world.ui_element(3).entity, 3);
 }
+
+// TextMeshPro text (ADR-013) is draw kind 2 with managed kind 3: the
+// renderer draws it exactly like a Text, and the managed side instantiates
+// a TMPro.TextMeshProUGUI from bits 8-15. Alignment is a runtime property
+// of both, applied per line at draw time.
+TEST(SceneUI, TextMeshProElementsLoadAsTextAndRealignAtRuntime)
+{
+    UISpec tmp;
+    tmp.kind_role = 2u | (3u << 8);
+    tmp.text_scale = 2u | (2u << 8) | (1u << 10); // right, middle
+    tmp.set_text("PRESS START");
+
+    const std::vector<uint8_t> bytes = wrap_scene(build_scene(1, {tmp}));
+    io::P2bFile file;
+    ASSERT_TRUE(file.parse(bytes.data(), static_cast<uint32_t>(bytes.size())));
+    static World world;
+    ASSERT_TRUE(world.load(file)) << world.error();
+
+    ASSERT_EQ(world.ui_element_count(), 1u);
+    const UIElement& ui = world.ui_element(0);
+    EXPECT_EQ(ui.kind & 0xFFu, 2u);
+    EXPECT_EQ((ui.kind >> 8) & 0xFFu, 3u);
+    EXPECT_EQ(ui.align_h, 2u);
+    EXPECT_EQ(ui.align_v, 1u);
+    EXPECT_STREQ(ui.text, "PRESS START");
+
+    world.ui_set_align(0, 1, 0);
+    EXPECT_EQ(world.ui_element(0).align_h, 1u);
+    EXPECT_EQ(world.ui_element(0).align_v, 0u);
+    // Out-of-range values clamp; an out-of-range element is ignored.
+    world.ui_set_align(0, 9, 9);
+    EXPECT_EQ(world.ui_element(0).align_h, 2u);
+    EXPECT_EQ(world.ui_element(0).align_v, 2u);
+    world.ui_set_align(7, 0, 0);
+    EXPECT_EQ(world.ui_element(0).align_h, 2u);
+}

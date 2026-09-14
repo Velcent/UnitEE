@@ -12,11 +12,12 @@ using gfx::RenderQueue;
 TEST(RenderQueue, OpaqueSortsFrontToBackTransparentBackToFront)
 {
     RenderQueue q;
-    // Interleaved pushes; entity ids mark identity.
-    ASSERT_TRUE(q.push(0, 0, 0, 0.9f, 1, 0, 0)); // opaque far
-    ASSERT_TRUE(q.push(1, 3, 0, 0.2f, 2, 0, 0)); // transparent near
-    ASSERT_TRUE(q.push(0, 0, 0, 0.1f, 3, 0, 0)); // opaque near
-    ASSERT_TRUE(q.push(1, 3, 0, 0.8f, 4, 0, 0)); // transparent far
+    // Interleaved pushes; entity ids mark identity. Passes are M14's:
+    // 0 sky, 1 opaque, 2 transparent (render_queue.cpp).
+    ASSERT_TRUE(q.push(1, 0, 0, 0.9f, 1, 0, 0)); // opaque far
+    ASSERT_TRUE(q.push(2, 3, 0, 0.2f, 2, 0, 0)); // transparent near
+    ASSERT_TRUE(q.push(1, 0, 0, 0.1f, 3, 0, 0)); // opaque near
+    ASSERT_TRUE(q.push(2, 3, 0, 0.8f, 4, 0, 0)); // transparent far
     q.sort();
 
     ASSERT_EQ(q.count(), 4u);

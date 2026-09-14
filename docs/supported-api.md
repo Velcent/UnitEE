@@ -22,7 +22,7 @@ presumed to be the explicit "not supported" list. TODO(spec missing: section
 | Physics | `Physics.Raycast`/`SphereCast`/`OverlapSphereNonAlloc` against a baked BVH and primitives; `Rigidbody` (semi-implicit Euler); `BoxCollider`, `SphereCollider`, `CapsuleCollider`, `MeshCollider` (static, baked to world space offline); `CharacterController` (swept capsule, step + slope); trigger + collision callbacks (deviations 16-21) |
 | Audio | `AudioSource` (2D + simple 3D pan/attenuation), `AudioClip` (streamed music, resident SFX), `AudioListener` |
 | Input | `Input.GetAxis`/`GetAxisRaw`/`GetButton*` over Unity's default axis and button names, mapped to DualShock 2; `PS2Input` for per-button access, analog pressure, rumble and port 2 (deviations 11-12) |
-| UI | An immediate-mode-backed subset of uGUI: `Canvas` (screen space overlay), `Image`, `RawImage`, `Text` (bitmap fonts baked offline), `Button`, `Slider`. Console-only extras like `PS2Input`: `PS2TextGlow` draws a `Text` again in an additive ring under itself, the era's bloom, for boot-style wordmarks; `PS2DebugOverlay` shows the runtime's on-screen diagnostics (frame timing, profiler zones, memory, VRAM allocations), the pages Select cycles through (deviation 38) |
+| UI | An immediate-mode-backed subset of uGUI: `Canvas` (screen space overlay), `Image`, `RawImage`, `Text` (bitmap fonts baked offline), `Button`, `Slider`; `TextMeshProUGUI` through the same baked-font path (ADR-013, deviation 45). Console-only extras like `PS2Input`: `PS2TextGlow` draws a `Text` again in an additive ring under itself, the era's bloom, for boot-style wordmarks; `PS2DebugOverlay` shows the runtime's on-screen diagnostics (frame timing, profiler zones, memory, VRAM allocations), the pages Select cycles through (deviation 38) |
 | Persistence | `PlayerPrefs`-equivalent on memory card, plus a save API with icon support |
 | Scene management | `SceneManager.LoadScene`/`LoadSceneAsync` by name, `AsyncOperation` (yieldable from a coroutine, with `progress` and `allowSceneActivation`), additive loading (deviations 13-14) |
 | Resources | An `Addressables`-like async load from a build-ordered disc layout |
@@ -380,3 +380,43 @@ These are listed prominently here and asserted in the conformance suite
     scripts, but carry no mesh on the console, so moving one moves
     nothing: Batching Static means what it says. The per-object light
     pick (deviation 39) and frustum culling then work per cell.
+
+45. **TextMeshPro is the baked-font path with TMP's names on it.** A
+    `TextMeshProUGUI` exports as a text element: its font asset resolves
+    to the TTF it was generated from (a dynamic asset's runtime reference,
+    or a static asset's editor GUID), Unity's rasteriser bakes that font
+    at the component's `fontSize` with its Bold/Italic style, and the
+    console draws it as it draws a `Text`. The shim offers `text`,
+    `SetText`, `color`, `richText`, `alignment`, `horizontalAlignment`,
+    `verticalAlignment` and `enabled`, with TMP's enum values. Rich text
+    markup is STRIPPED (at export and in the runtime setter) because the
+    baked font has no variant to switch to; `Justified` and `Flush` draw
+    as Left, `Geometry` as Center, `Baseline` as Bottom, `Capline` as Top,
+    and the property reads back the folded value. `fontSize`,
+    `fontStyle`, `enableAutoSizing`, spacing and every SDF material
+    property are bake-time and absent from the shim: a script setting
+    them fails to compile with the property named. A font asset whose
+    source TTF is not in the project bakes Unity's default font with a
+    warning. World-space `TextMeshPro` is not exported (the validator
+    says so and points at a canvas). Deviation 30's limits apply: 48
+    bytes per element, printable ASCII, four (font, size, style) atlases
+    per scene. `Text.fontStyle` bakes Bold and Italic now as well, and
+    `Text.alignment` (`TextAnchor`) is a runtime property.
+
+46. **Baked lighting is vertex colour sampled from the lightmaps at
+    export.** With the profile's Lighting set to Baked, every lightmapped
+    renderer's vertices take the decoded lightmap colour at their
+    lightmap UV (times the material tint), textured surfaces as the GS
+    modulate (up to 2.0 for overbright), untextured ones as the pixel
+    colour; the runtime adds no light to them (ADR-014). What you get:
+    shadows, bounce and ambient occlusion exactly as baked, at no runtime
+    cost. What you do not get: the realtime half of a Mixed light (set
+    lights to Baked for parity; the validator warns), and lightmap
+    resolution finer than the vertices, which is why baked meshes are
+    subdivided to the profile's Baked Vertex Spacing (1.5 world units by
+    default; smaller is sharper and costs vertices). Renderers without a
+    lightmap, dynamic objects included, keep the per-object realtime
+    lighting of deviation 39, and a baked renderer is never static
+    batched (deviation 44): its colours are its own. Generate Lighting
+    before building; a Baked profile with no lightmaps warns and exports
+    realtime.

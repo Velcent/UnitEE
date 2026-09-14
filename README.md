@@ -153,6 +153,10 @@ fails the build with actionable errors rather than producing a broken ISO.
 - **Platform:** 24 audio voices with streamed music, both controller ports with
   pressure and rumble, memory card persistence, additive and async scene loading.
 - **UI:** a uGUI subset with layout baked at export and D-pad navigation in place
+  of a pointer; TextMeshProUGUI rides the same baked-font path
+- **Lighting:** one directional light plus ambient per vertex on VU1, or Unity's
+  baked lightmaps sampled into vertex colours at export (shadows and bounce at no
+  runtime cost)
   of the pointer.
 
 Every difference from Unity's semantics is a numbered conformance deviation in

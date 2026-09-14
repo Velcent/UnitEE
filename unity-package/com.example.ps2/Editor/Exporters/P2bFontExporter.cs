@@ -36,7 +36,10 @@ namespace Ps2.Editor
             public int Advance;
         }
 
-        internal static BakedFont Bake(Font font, int size,
+        // 'style' is the component's FontStyle (uGUI Text.fontStyle, or the
+        // Bold/Italic bits of a TMP fontStyle, ADR-013): Unity's rasteriser
+        // applies it, so bold text bakes bold.
+        internal static BakedFont Bake(Font font, int size, FontStyle style,
                                        List<string> warnings)
         {
             var chars = new char[LastChar - FirstChar + 1];
@@ -47,7 +50,7 @@ namespace Ps2.Editor
             // One request for EVERYTHING, then read, then query: a second
             // request can rebuild the dynamic atlas and invalidate every
             // CharacterInfo fetched before it.
-            font.RequestCharactersInTexture(all, size, FontStyle.Normal);
+            font.RequestCharactersInTexture(all, size, style);
             var source = font.material != null
                              ? font.material.mainTexture as Texture2D
                              : null;
@@ -78,7 +81,8 @@ namespace Ps2.Editor
             var placements = new List<(int glyph, CharacterInfo ci, int x, int y)>();
             for (int i = 0; i < chars.Length; i++)
             {
-                if (!font.GetCharacterInfo(chars[i], out CharacterInfo ci, size))
+                if (!font.GetCharacterInfo(chars[i], out CharacterInfo ci, size,
+                                           style))
                     continue;
                 int gw = ci.glyphWidth, gh = ci.glyphHeight;
                 if (ci.maxY > maxTop) maxTop = ci.maxY;

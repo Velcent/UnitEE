@@ -72,6 +72,11 @@ Vertex layouts by material kind (see MATL): unlit 2 qw (pos, colour),
 unlit-textured 3 qw (pos, stq with q pre-set to 1, colour), lit 3 qw (pos,
 normal, colour). Positions are `V4-32` floats with w = 1.
 
+Colour ranges: untextured layouts carry 0..255 (the vertex colour is the
+pixel); textured layouts carry GS modulate units, 128 = 1.0. A baked
+material (MATL flags bit5, ADR-014) may carry textured colours above 128,
+up to 255 = 2.0, for lightmap texels brighter than the texture.
+
 **Recorded deviation from plan 10.3:** v1 stores raw qword payloads consumed
 through ref-tag unpacks, not a pre-built VIF-code stream, and positions are
 V4-32 float, not V4-16 quantised, with triangle lists rather than strips.
@@ -110,7 +115,10 @@ Material[count] {           // 48 bytes each; reader rejects other strides
     u64 gs_test             // TEST_1 register value; 0 = device default
     u64 gs_alpha            // ALPHA_1 register value; used when blend set
     u32 flags               // bit0 zwrite, bit1 blend, bit2 transparent-pass,
-                            // bit3 clamp addressing, bit4 sky (drawn first) (M14)
+                            // bit3 clamp addressing, bit4 sky (drawn first) (M14),
+                            // bit5 baked (ADR-014): the vertex colours hold
+                            // the lighting; a lit-layout material with it
+                            // runs with no light and ambient 1.0
     u32 pad
 }
 ```
@@ -214,7 +222,8 @@ PS2ParticleSystem (M12.5, 64B, ADR-011) {
 UIElement (M12.5 task 5, 84B) {
                    u32 kind;                 // low8: 0 rect, 1 image, 2 text;
                                              // bits 8-15 managed kind
-                                             // (Image/RawImage/Text);
+                                             // (0 Image, 1 RawImage, 2 Text,
+                                             // 3 TextMeshProUGUI, ADR-013);
                                              // bits 16+ role (1 button,
                                              // 2 slider)
                    f32 x, y, w, h;           // screen px, top-left, BAKED

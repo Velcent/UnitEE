@@ -262,6 +262,19 @@ static void zero_light_constants(gfx::Qword* constants)
     set_float4(constants[16], 255.0f, 255.0f, 255.0f, 128.0f);
 }
 
+// Baked lighting (ADR-014): the vertex colours ARE the lighting. No light
+// slot and an ambient of exactly 1.0, so the lit program's light factor is
+// one, the colours pass through untouched, and only the fog stage does any
+// work.
+static void baked_light_constants(gfx::Qword* constants)
+{
+    for (uint32_t i = 7; i <= 14; ++i) {
+        set_float4(constants[i], 0, 0, 0, 0);
+    }
+    set_float4(constants[15], 1.0f, 1.0f, 1.0f, 0);
+    set_float4(constants[16], 255.0f, 255.0f, 255.0f, 128.0f);
+}
+
 // LODGroup levels (M14): Unity's relative screen height, size / distance
 // over the view's vertical extent, against the level's [min, max).
 static bool lod_visible(const World& world, uint32_t entity, Vec3 cam_pos,
@@ -647,8 +660,13 @@ bool SceneRenderer::render(gfx::GsDevice& device, gfx::DmaChain& chain,
             gfx::BatchBuilder::build_unlit_constants(mvp.m, vscale, voffset,
                                                      4095.0f, cam.znear,
                                                      g_constants);
-            fill_light_constants(world, w, Vec3{lc4.x, lc4.y, lc4.z},
-                                 world_radius(w, mesh.bounds_radius), g_constants);
+            if (mat.baked) {
+                baked_light_constants(g_constants);
+            } else {
+                fill_light_constants(world, w, Vec3{lc4.x, lc4.y, lc4.z},
+                                     world_radius(w, mesh.bounds_radius),
+                                     g_constants);
+            }
             if (mat.kind == kMaterialVertexLitFog) {
                 // f = clamp(w*scale + offset, 0, 255); disabled fog means
                 // scale 0 / offset 255: F=255 everywhere, i.e. no fog.

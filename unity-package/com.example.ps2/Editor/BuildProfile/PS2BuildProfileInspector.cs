@@ -97,6 +97,9 @@ namespace Ps2.Editor
             {
                 Field("textureMaxSize");
                 Field("audioSampleRate");
+                Field("lighting");
+                if (profile.lighting == PS2Lighting.Baked)
+                    Field("bakedVertexSpacing");
                 Field("strictContent");
                 Field("exportSkybox");
                 if (profile.exportSkybox)

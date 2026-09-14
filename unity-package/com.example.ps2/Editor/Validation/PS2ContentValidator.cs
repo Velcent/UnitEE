@@ -35,6 +35,9 @@ namespace Ps2.Editor
             "SkinnedMeshRenderer", "Camera", "Light", "Animator", "Animation",
             "AudioSource", "AudioListener", "BoxCollider", "SphereCollider",
             "CapsuleCollider", "MeshCollider", "Rigidbody", "CharacterController",
+            // ADR-013: canvas TMP text is exported; world-space TMP is known
+            // and dropped with a reason.
+            "TextMeshProUGUI", "TextMeshPro",
             "LODGroup", // M14
         };
 
@@ -66,6 +69,8 @@ namespace Ps2.Editor
             // canvas drags in that export as nothing and harm nothing.
             "Canvas", "CanvasRenderer", "Image", "RawImage", "Text",
             "Button", "Slider", "CanvasScaler", "GraphicRaycaster",
+            // ADR-013.
+            "TextMeshProUGUI",
             // M14: MeshRenderer levels export with their windows.
             "LODGroup",
         };
@@ -79,6 +84,11 @@ namespace Ps2.Editor
         private static readonly Dictionary<string, string> DropReasons =
             new Dictionary<string, string>
             {
+                ["TextMeshPro"] =
+                    "world-space TextMeshPro is not exported: the console " +
+                    "has no runtime text layout in 3D. Put the text on a " +
+                    "Canvas as a TextMeshProUGUI, which is exported through " +
+                    "the baked-font path (ADR-013).",
                 ["EventSystem"] =
                     "there is no pointer on a DualShock 2. Focus moves with " +
                     "the D-pad through PS2UINavigation (automatic for " +
@@ -134,6 +144,7 @@ namespace Ps2.Editor
                 foreach (GameObject root in scene.GetRootGameObjects())
                     WalkObject(root, scenePath, ctx, findings);
                 ValidateSceneBudget(scene, scenePath, ctx, findings);
+                ValidateBakedLighting(scenePath, ctx, findings);
 
                 // Exactly one AudioListener, as Unity itself warns: the mixer
                 // has one listener pose, and the loader keeps the FIRST it
@@ -156,6 +167,42 @@ namespace Ps2.Editor
 
             ValidateTextures(ctx, findings);
             return findings;
+        }
+
+        // Baked lighting (ADR-014) is only as good as the bake: a scene
+        // with no lightmaps exports every renderer realtime, and a Mixed or
+        // Realtime directional light contributes nothing to lightmapped
+        // surfaces on the console, so both are said before the build runs.
+        private static void ValidateBakedLighting(string scenePath,
+                                                  PS2BuildContext ctx,
+                                                  List<Finding> findings)
+        {
+            if (ctx.Profile.lighting != PS2Lighting.Baked)
+                return;
+            if (LightmapSettings.lightmaps.Length == 0)
+            {
+                findings.Add(Warning(
+                    $"{scenePath}: the profile's lighting is Baked but the scene " +
+                    "has no lightmaps. Generate Lighting (Window > Rendering > " +
+                    "Lighting > Generate Lighting) and build again; until then " +
+                    "every renderer exports with realtime vertex lighting.", null));
+                return;
+            }
+            foreach (Light light in UnityEngine.Object.FindObjectsByType<Light>(
+                         FindObjectsSortMode.None))
+            {
+                if (light.type == LightType.Directional &&
+                    light.lightmapBakeType != LightmapBakeType.Baked)
+                {
+                    findings.Add(Warning(
+                        $"{scenePath}: '{PathOf(light.gameObject)}' is a " +
+                        $"{light.lightmapBakeType} light in a Baked build. Its " +
+                        "direct contribution is baked only into what the " +
+                        "lightmapper bakes; lightmapped surfaces on the console " +
+                        "receive no realtime addition (deviation 46). Set the " +
+                        "light to Baked for the same look in both.", light));
+                }
+            }
         }
 
         private static void WalkObject(GameObject go, string scenePath,

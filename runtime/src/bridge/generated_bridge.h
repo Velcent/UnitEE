@@ -252,6 +252,10 @@ void ps2ur_ui_set_text(int32_t element, const char* text);
 void ps2ur_ui_set_text_glow(int32_t element, float spread, float intensity, float dilate);
 // Shows/hides an element; Behaviour.enabled on the managed graphics.
 void ps2ur_ui_set_visible(int32_t element, int32_t visible);
+// Text.alignment / TMP_Text.alignment: 0 left/top, 1 centre/middle, 2 right/bottom. Applied per line at draw time.
+void ps2ur_ui_set_align(int32_t element, int32_t align_h, int32_t align_v);
+// The authored alignment of an element: align_h | (align_v << 8), so a graphic's managed view starts from what the exporter baked.
+uint32_t ps2ur_ui_get_align(int32_t element);
 
 } // extern "C"
 

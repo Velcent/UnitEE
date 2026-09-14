@@ -45,6 +45,12 @@ namespace UnityEngine.UI
     {
         internal int Element = -1;
         private Color m_Color = Color.white;
+        // Per-line alignment of text graphics: 0 left/top, 1 centre/middle,
+        // 2 right/bottom, the native draw table's own encoding. Seeded from
+        // what the exporter baked; Text.alignment and TMP_Text.alignment
+        // both write through here.
+        internal int AlignH;
+        internal int AlignV;
 
         public Color color
         {
@@ -62,6 +68,25 @@ namespace UnityEngine.UI
             {
                 Native.ps2ur_ui_set_colour(Element, Pack(m_Color));
             }
+        }
+
+        internal void PushAlign()
+        {
+            if (Element >= 0)
+            {
+                Native.ps2ur_ui_set_align(Element, AlignH, AlignV);
+            }
+        }
+
+        internal void SyncAlignFromNative()
+        {
+            if (Element < 0)
+            {
+                return;
+            }
+            uint packed = Native.ps2ur_ui_get_align(Element);
+            AlignH = (int)(packed & 0xFF);
+            AlignV = (int)((packed >> 8) & 0xFF);
         }
 
         // Seeds m_Color from the AUTHORED tint in the native draw table.
@@ -115,6 +140,20 @@ namespace UnityEngine.UI
                     // 48-byte native cap, baked 8x8 font (deviation 30).
                     Native.ps2ur_ui_set_text(Element, m_Text);
                 }
+            }
+        }
+
+        // TextAnchor enumerates a 3x3 grid row-major (UpperLeft = 0 ..
+        // LowerRight = 8), so the column is the horizontal alignment and
+        // the row the vertical one, the same split the exporter makes.
+        public TextAnchor alignment
+        {
+            get => (TextAnchor)(AlignV * 3 + AlignH);
+            set
+            {
+                AlignH = (int)value % 3;
+                AlignV = (int)value / 3;
+                PushAlign();
             }
         }
     }
@@ -232,6 +271,31 @@ namespace UnityEngine.UI
 
 namespace UnityEngine
 {
+    // Where text sits in its rect. Same values as Unity's.
+    public enum TextAnchor
+    {
+        UpperLeft,
+        UpperCenter,
+        UpperRight,
+        MiddleLeft,
+        MiddleCenter,
+        MiddleRight,
+        LowerLeft,
+        LowerCenter,
+        LowerRight,
+    }
+
+    // A bake-time property on this platform: the exporter rasterises each
+    // (font, size, style) the scene uses (ADR-013). Present so scripts that
+    // READ it compile; there is no runtime setter to offer.
+    public enum FontStyle
+    {
+        Normal,
+        Bold,
+        Italic,
+        BoldAndItalic,
+    }
+
     // Pad-driven focus, the EventSystem replacement (M12.5 task 5,
     // deviation 31): Up/Down move focus in hierarchy order, Cross submits
     // the focused Button, Left/Right adjust the focused Slider. Registered

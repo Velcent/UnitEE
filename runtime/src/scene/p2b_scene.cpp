@@ -119,6 +119,7 @@ bool World::load(const io::P2bFile& file)
             m.transparent = (flags & 4u) != 0u;
             m.clamp = (flags & 8u) != 0u;
             m.sky = (flags & 16u) != 0u;
+            m.baked = (flags & kMaterialFlagBaked) != 0u;
         }
         m_material_count = count;
     }
@@ -1742,6 +1743,14 @@ void World::ui_set_text(uint32_t i, const char* text)
         m_ui[i].text[b] = text[b];
     }
     m_ui[i].text[b] = '\0';
+}
+
+void World::ui_set_align(uint32_t i, uint32_t align_h, uint32_t align_v)
+{
+    if (i < m_ui_count) {
+        m_ui[i].align_h = static_cast<uint8_t>(align_h > 2u ? 2u : align_h);
+        m_ui[i].align_v = static_cast<uint8_t>(align_v > 2u ? 2u : align_v);
+    }
 }
 
 void World::ui_set_visible(uint32_t i, bool visible)

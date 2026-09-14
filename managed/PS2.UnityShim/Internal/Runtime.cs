@@ -278,7 +278,13 @@ namespace UnityEngine.Internal
                 return;
             }
             UI.Graphic graphic;
-            if (kind == 2)
+            if (kind == 3)
+            {
+                // TextMeshProUGUI (ADR-013): the same text element the
+                // renderer draws for a Text, with TMP's API on top.
+                graphic = new TMPro.TextMeshProUGUI();
+            }
+            else if (kind == 2)
             {
                 graphic = new UI.Text();
             }
@@ -292,6 +298,7 @@ namespace UnityEngine.Internal
             }
             graphic.Element = element;
             graphic.SyncColourFromNative();
+            graphic.SyncAlignFromNative();
             graphic.Attach(go);
             go.RegisterComponent(graphic);
         }

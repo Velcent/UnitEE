@@ -71,6 +71,30 @@ extern "C" void ps2ur_ui_set_text_glow(int32_t element, float spread, float inte
     }
 }
 
+extern "C" void ps2ur_ui_set_align(int32_t element, int32_t align_h,
+                                   int32_t align_v)
+{
+    scene::World* world = bridge::world();
+    if (world != nullptr && element >= 0 && align_h >= 0 && align_v >= 0) {
+        world->ui_set_align(static_cast<uint32_t>(element),
+                            static_cast<uint32_t>(align_h),
+                            static_cast<uint32_t>(align_v));
+    }
+}
+
+extern "C" uint32_t ps2ur_ui_get_align(int32_t element)
+{
+    scene::World* world = bridge::world();
+    if (world == nullptr || element < 0 ||
+        static_cast<uint32_t>(element) >= world->ui_element_count()) {
+        return 0; // left, top: the uGUI default
+    }
+    const scene::UIElement& ui =
+        world->ui_element(static_cast<uint32_t>(element));
+    return static_cast<uint32_t>(ui.align_h) |
+           (static_cast<uint32_t>(ui.align_v) << 8);
+}
+
 extern "C" void ps2ur_ui_set_visible(int32_t element, int32_t visible)
 {
     scene::World* world = bridge::world();

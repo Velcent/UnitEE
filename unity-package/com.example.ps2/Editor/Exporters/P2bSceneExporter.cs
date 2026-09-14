@@ -6,6 +6,7 @@
 // deduplicated, and emits one file.
 using System.Collections.Generic;
 using UnityEditor;
+using UnityEditor.SceneManagement;
 using UnityEngine;
 using UnityEngine.SceneManagement;
 
@@ -155,6 +156,18 @@ namespace Ps2.Editor
         // entry point the same way PendingSkin supplies the rig.
         internal static byte[] PendingSound;
 
+        // The profile's lighting mode (ADR-014): 0 realtime vertex lighting
+        // as before; 1 baked, where every lightmapped renderer's vertex
+        // colours are sampled from the scene's lightmaps at export and the
+        // console draws them as they are. Set by the build step; a menu
+        // export keeps realtime.
+        internal static int LightingMode = 0;
+
+        // Baked meshes are subdivided until no edge exceeds this many world
+        // units, so shadow edges have vertices to land on. 0 disables the
+        // extra subdivision.
+        internal static float BakedVertexSpacing = 1.5f;
+
         // One uGUI element (M12.5 task 5), captured during the walk with its
         // screen rect already resolved -- real RectTransform anchor math
         // against the profile framebuffer, baked at export (deviation 30).
@@ -174,8 +187,9 @@ namespace Ps2.Editor
             public Vector4 Border;    // 9-slice L,B,R,T (sprite.border px)
             public int AlignH;        // 0 left, 1 centre, 2 right
             public int AlignV;        // 0 top, 1 middle, 2 bottom
-            public Font UsedFont;     // Text only; baked per (font, size)
+            public Font UsedFont;     // Text only; baked per (font, size, style)
             public int UsedFontSize;
+            public FontStyle UsedFontStyle = FontStyle.Normal;
             public int FontIndex = -1; // FONT table index, -1 = builtin 8x8
         }
 
@@ -193,6 +207,10 @@ namespace Ps2.Editor
             // object-space and shared, and the near-rejection subdivision
             // threshold is a WORLD-space size (see P2bMeshExporter).
             public float MaxUserScale = 1f;
+            // Baked lighting (ADR-014): set when this key is one renderer's
+            // lightmapped instance of the mesh. Such keys are never shared.
+            public P2bMeshExporter.BakedShading Shading;
+            public float BakedMaxEdge;
             // The same, per axis: the subdivision measures edges in world
             // units, and a flat slab is not as thick as it is wide.
             public Vector3 MaxUserScaleAxes = Vector3.one;
@@ -205,7 +223,8 @@ namespace Ps2.Editor
             var meshLookup = new Dictionary<string, int>();
             var textures = new List<Texture2D>();
             var textureLookup = new Dictionary<Texture2D, int>();
-            var materials = new List<(uint kind, uint texture)>();
+            var materials = new List<(uint kind, uint texture, bool baked)>();
+            P2bLightmapSampler.BeginExport();
             var materialLookup = new Dictionary<string, int>();
 
             GameObject[] roots = SceneManager.GetActiveScene().GetRootGameObjects();
@@ -262,7 +281,8 @@ namespace Ps2.Editor
                     if (!materialLookup.TryGetValue(key, out int mi))
                     {
                         mi = materials.Count;
-                        materials.Add((P2bMeshExporter.KindSkinned, texIndex));
+                        materials.Add((P2bMeshExporter.KindSkinned, texIndex,
+                                       false));
                         materialLookup[key] = mi;
                     }
                     skinMaterialOf.Add(mi);
@@ -320,10 +340,12 @@ namespace Ps2.Editor
             foreach (var e in entities)
             {
                 UIRecord ui = e.Ui;
-                if (ui == null || ui.ManagedKind != 2 || ui.UsedFont == null)
+                // Every TEXT draw kind: uGUI Text and TextMeshProUGUI alike.
+                if (ui == null || ui.DrawKind != 2 || ui.UsedFont == null)
                     continue;
                 string fontKey =
-                    ui.UsedFont.GetInstanceID() + ":" + ui.UsedFontSize;
+                    ui.UsedFont.GetInstanceID() + ":" + ui.UsedFontSize + ":" +
+                    (int)ui.UsedFontStyle;
                 if (!fontIndexOf.TryGetValue(fontKey, out int fi))
                 {
                     fi = -1;
@@ -339,7 +361,7 @@ namespace Ps2.Editor
                         var fontWarnings = new List<string>();
                         P2bFontExporter.BakedFont bakedFont =
                             P2bFontExporter.Bake(ui.UsedFont, ui.UsedFontSize,
-                                                 fontWarnings);
+                                                 ui.UsedFontStyle, fontWarnings);
                         foreach (string w in fontWarnings)
                             Debug.LogWarning("[PS2] " + w);
                         if (bakedFont != null)
@@ -426,7 +448,7 @@ namespace Ps2.Editor
                 List<byte[]> chunks = P2bMeshExporter.Export(
                     key.Mesh, EffectiveKind(key.Kind), key.MaterialIndex,
                     key.Fallback, key.MaxUserScale, key.Submesh,
-                    key.MaxUserScaleAxes);
+                    key.MaxUserScaleAxes, key.Shading, key.BakedMaxEdge);
                 budget.triangles += P2bMeshExporter.LastTriangles;
                 budget.NoteMesh(key.Mesh.name, P2bMeshExporter.LastTriangles);
                 firstSectionOf[k] = meshSections.Count;
@@ -476,6 +498,7 @@ namespace Ps2.Editor
             }
 
             var writer = new P2bWriter();
+            P2bLightmapSampler.LogSummary();
 
             // MATL first (order is irrelevant to the reader; indices are
             // per-type). One record per collected material.
@@ -494,7 +517,8 @@ namespace Ps2.Editor
                 // MATL v2 (M8 task 5): GS TEST/ALPHA precomputed as data.
                 matl.U64(GsTestFor(m.kind));
                 matl.U64(GsAlphaFor(m.kind));
-                matl.U32(MaterialFlags(m.kind));
+                matl.U32(MaterialFlags(m.kind) |
+                         (m.baked ? P2bMeshExporter.MaterialFlagBaked : 0u));
                 matl.U32(0);
             }
             writer.AddSection(P2bWriter.SectionMaterial, matl.ToArray());
@@ -888,7 +912,7 @@ namespace Ps2.Editor
         private static void BakeSkybox(List<EntityRecord> entities, List<MeshKey> meshes,
                                        List<Texture2D> textures,
                                        Dictionary<Texture2D, int> textureLookup,
-                                       List<(uint, uint)> materials,
+                                       List<(uint, uint, bool)> materials,
                                        Dictionary<string, int> materialLookup,
                                        List<UnityEngine.Object> temps)
         {
@@ -958,7 +982,7 @@ namespace Ps2.Editor
                 if (!materialLookup.TryGetValue(matKey, out int mi))
                 {
                     mi = materials.Count;
-                    materials.Add((KindSkyExport, (uint)ti));
+                    materials.Add((KindSkyExport, (uint)ti, false));
                     materialLookup[matKey] = mi;
                 }
 
@@ -1040,7 +1064,7 @@ namespace Ps2.Editor
                                  Dictionary<string, int> meshLookup,
                                  List<Texture2D> textures,
                                  Dictionary<Texture2D, int> textureLookup,
-                                 List<(uint, uint)> materials,
+                                 List<(uint, uint, bool)> materials,
                                  Dictionary<string, int> materialLookup)
         {
             var record = new EntityRecord
@@ -1101,18 +1125,59 @@ namespace Ps2.Editor
                         texIndex = (uint)ti;
                     }
 
-                    string matKey = kind + ":" + texIndex;
+                    // Baked lighting (ADR-014): a lightmapped renderer in a
+                    // baked-mode build gets its own copy of the mesh with
+                    // the lightmap sampled into every vertex. Textured
+                    // surfaces keep the textured layout (the colour becomes
+                    // the modulate); untextured ones drop to the unlit
+                    // layout, or keep the lit-fog layout with the baked
+                    // flag when the scene has fog, so fog still applies.
+                    // A baked renderer is never static-batched: its colours
+                    // are its own.
+                    P2bMeshExporter.BakedShading shading = null;
+                    bool baked = false;
+                    if (LightingMode == 1 && renderer.lightmapIndex >= 0 &&
+                        renderer.lightmapIndex < 65534)
+                    {
+                        P2bLightmapSampler sampler =
+                            P2bLightmapSampler.For(renderer.lightmapIndex, t.name);
+                        if (sampler != null)
+                        {
+                            bool texturedKind =
+                                kind == P2bMeshExporter.KindUnlitTextured ||
+                                kind == KindCutoutTexturedExport;
+                            if (kind == P2bMeshExporter.KindVertexLit ||
+                                kind == P2bMeshExporter.KindVertexLitFog)
+                            {
+                                kind = RenderSettings.fog
+                                           ? P2bMeshExporter.KindVertexLitFog
+                                           : P2bMeshExporter.KindUnlit;
+                            }
+                            Vector4 scaleOffset = renderer.lightmapScaleOffset;
+                            Color tint = mat != null ? mat.color : Color.white;
+                            shading = new P2bMeshExporter.BakedShading
+                            {
+                                GsUnits = texturedKind,
+                                Shade = uv => sampler.VertexColour(
+                                    uv, scaleOffset, tint, texturedKind),
+                            };
+                            baked = true;
+                            P2bLightmapSampler.CountRenderer();
+                        }
+                    }
+
+                    string matKey = kind + ":" + texIndex + ":" + (baked ? 1 : 0);
                     if (!materialLookup.TryGetValue(matKey, out int mi))
                     {
                         mi = materials.Count;
-                        materials.Add((kind, texIndex));
+                        materials.Add((kind, texIndex, baked));
                         materialLookup.Add(matKey, mi);
                     }
 
                     Color32 fallback = mat != null
                         ? (Color32)mat.color
                         : new Color32(255, 255, 255, 255);
-                    if (batchStatic)
+                    if (batchStatic && !baked)
                     {
                         // Merged after the walk; this entity keeps no mesh.
                         CollectStatic(t, mesh, mesh.subMeshCount > 1 ? s : -1, kind,
@@ -1123,6 +1188,13 @@ namespace Ps2.Editor
                                      kind + ":" + mi + ":" + fallback.r + "," +
                                      fallback.g + "," + fallback.b + "," +
                                      fallback.a;
+                    if (baked)
+                    {
+                        // Per renderer: two instances of one mesh sit under
+                        // different lightmap texels, exactly as Unity bakes
+                        // them.
+                        meshKey += ":lm" + renderer.GetInstanceID();
+                    }
                     if (!meshLookup.TryGetValue(meshKey, out int meshIndex))
                     {
                         meshIndex = meshes.Count;
@@ -1133,6 +1205,8 @@ namespace Ps2.Editor
                             Kind = kind,
                             MaterialIndex = (uint)mi,
                             Fallback = fallback,
+                            Shading = shading,
+                            BakedMaxEdge = baked ? BakedVertexSpacing : 0f,
                         });
                         meshLookup.Add(meshKey, meshIndex);
                     }
@@ -1331,6 +1405,49 @@ namespace Ps2.Editor
             var text = t.GetComponent<UnityEngine.UI.Text>();
             var image = t.GetComponent<UnityEngine.UI.Image>();
             var raw = t.GetComponent<UnityEngine.UI.RawImage>();
+#if PS2_HAS_TMP
+            // TextMeshProUGUI (ADR-013): the same text element a Text
+            // becomes, with the font resolved from the TMP font asset's
+            // source TTF and the style bits Unity's rasteriser understands.
+            var tmp = t.GetComponent<TMPro.TextMeshProUGUI>();
+            if (tmp != null)
+            {
+                record.DrawKind = 2;
+                record.ManagedKind = 3;
+                record.Colour = tmp.color;
+                record.Text = tmp.richText ? StripRichText(tmp.text ?? "")
+                                           : (tmp.text ?? "");
+                if (record.Text.Length > 47)
+                {
+                    Debug.LogWarning(
+                        "[PS2] TextMeshProUGUI on '" + t.name + "' is over " +
+                        "the 48-byte cap of the baked font path and was " +
+                        "truncated. Deviation 30 in docs/supported-api.md.");
+                    record.Text = record.Text.Substring(0, 47);
+                }
+                int size = Mathf.Max(1, Mathf.RoundToInt(tmp.fontSize));
+                record.TextScale = Mathf.Clamp(Mathf.RoundToInt(size / 8f), 1, 4);
+                record.AlignH = TmpAlignH(tmp.horizontalAlignment);
+                record.AlignV = TmpAlignV(tmp.verticalAlignment);
+                record.UsedFont = ResolveTmpFont(tmp.font, t.name);
+                record.UsedFontSize = size;
+                bool bold = (tmp.fontStyle & TMPro.FontStyles.Bold) != 0;
+                bool italic = (tmp.fontStyle & TMPro.FontStyles.Italic) != 0;
+                record.UsedFontStyle = bold && italic ? FontStyle.BoldAndItalic
+                                       : bold ? FontStyle.Bold
+                                       : italic ? FontStyle.Italic
+                                       : FontStyle.Normal;
+                if (tmp.enableAutoSizing)
+                {
+                    Debug.LogWarning(
+                        "[PS2] TextMeshProUGUI on '" + t.name + "' uses " +
+                        "auto-sizing; the PS2 bakes its current fontSize (" +
+                        size + "). Deviation 45 in docs/supported-api.md.");
+                }
+                drawable = true;
+            }
+            else
+#endif
             if (text != null)
             {
                 record.DrawKind = 2;
@@ -1355,6 +1472,7 @@ namespace Ps2.Editor
                 // above survives as the fallback path's size.
                 record.UsedFont = text.font;
                 record.UsedFontSize = Mathf.Max(1, text.fontSize);
+                record.UsedFontStyle = text.fontStyle;
                 drawable = true;
             }
             else if (image != null)
@@ -1439,6 +1557,108 @@ namespace Ps2.Editor
                 }
             }
             return record;
+        }
+
+#if PS2_HAS_TMP
+        // The TMP font asset -> the TTF it was generated from. A dynamic
+        // asset keeps the reference at runtime; a static one (TMP's default
+        // LiberationSans SDF among them) drops it from the player build and
+        // keeps only the editor GUID, which the AssetDatabase resolves.
+        // Unity's own default font stands in when neither survives, so the
+        // text still bakes proportionally; the builtin 8x8 is the last
+        // resort and is said aloud.
+        private static Font ResolveTmpFont(TMPro.TMP_FontAsset asset,
+                                           string owner)
+        {
+            if (asset == null && TMPro.TMP_Settings.instance != null)
+                asset = TMPro.TMP_Settings.defaultFontAsset;
+            Font font = null;
+            if (asset != null)
+            {
+                font = asset.sourceFontFile;
+                if (font == null)
+                {
+                    var so = new SerializedObject(asset);
+                    SerializedProperty guid = so.FindProperty("m_SourceFontFileGUID");
+                    if (guid != null && !string.IsNullOrEmpty(guid.stringValue))
+                    {
+                        string path = AssetDatabase.GUIDToAssetPath(guid.stringValue);
+                        if (!string.IsNullOrEmpty(path))
+                            font = AssetDatabase.LoadAssetAtPath<Font>(path);
+                    }
+                }
+            }
+            if (font == null)
+            {
+                font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
+                Debug.LogWarning(
+                    "[PS2] TextMeshProUGUI on '" + owner + "' uses " +
+                    (asset != null ? "font asset '" + asset.name + "'"
+                                   : "no font asset") +
+                    ", whose source TTF is not in the project; baking " +
+                    "Unity's default font instead (ADR-013).");
+            }
+            return font;
+        }
+
+        private static int TmpAlignH(TMPro.HorizontalAlignmentOptions h)
+        {
+            switch (h)
+            {
+                case TMPro.HorizontalAlignmentOptions.Center:
+                case TMPro.HorizontalAlignmentOptions.Geometry:
+                    return 1;
+                case TMPro.HorizontalAlignmentOptions.Right:
+                    return 2;
+                default:
+                    return 0; // Left, Justified, Flush
+            }
+        }
+
+        private static int TmpAlignV(TMPro.VerticalAlignmentOptions v)
+        {
+            switch (v)
+            {
+                case TMPro.VerticalAlignmentOptions.Middle:
+                case TMPro.VerticalAlignmentOptions.Geometry:
+                    return 1;
+                case TMPro.VerticalAlignmentOptions.Bottom:
+                case TMPro.VerticalAlignmentOptions.Baseline:
+                    return 2;
+                default:
+                    return 0; // Top, Capline
+            }
+        }
+#endif
+
+        // Removes <tag>, </tag> and <tag=value> runs the way the shim does
+        // at runtime: the baked font has no bold, colour or size to switch
+        // to, so "<b>Go</b>" shows "Go". A lone '<' stays text.
+        internal static string StripRichText(string s)
+        {
+            if (s.IndexOf('<') < 0)
+                return s;
+            var sb = new System.Text.StringBuilder(s.Length);
+            int i = 0;
+            while (i < s.Length)
+            {
+                char c = s[i];
+                if (c == '<' && i + 1 < s.Length &&
+                    (s[i + 1] == '/' || s[i + 1] == '#' ||
+                     char.IsLetter(s[i + 1])))
+                {
+                    int close = s.IndexOf('>', i + 1);
+                    int reopen = s.IndexOf('<', i + 1);
+                    if (close > i && (reopen < 0 || reopen > close))
+                    {
+                        i = close + 1;
+                        continue;
+                    }
+                }
+                sb.Append(c);
+                i++;
+            }
+            return sb.ToString();
         }
 
         private static uint PackColour(Color c)
@@ -2306,6 +2526,211 @@ namespace Ps2.Editor
             P2bSceneExporter.ExportActiveScene(output);
             RenderSettings.fog = false; // leave the editor state clean
             Debug.Log("[PS2] fog scene exported to " + output);
+        }
+
+        // ---- ADR-014: baked lighting verification scene --------------------
+        //
+        //   Unity -batchmode -quit -executeMethod Ps2.Editor.PS2ExportMenu.ExportBakedLightScene -ps2Output <scene.p2b> [-ps2RealtimeOutput <twin.p2b>]
+        //
+        // A floor, a wall casting a shadow across it, a Baked directional
+        // light and a flat dark ambient. The scene is baked with the
+        // progressive CPU lightmapper at a coarse resolution and exported in
+        // baked mode; on target the scene-debug sample's luminance map shows
+        // the shadow as a dark band on the floor. A dynamic (non-static)
+        // sphere sits beside the wall to show the realtime path continuing
+        // for everything the lightmapper did not touch. With
+        // -ps2RealtimeOutput the same scene is exported realtime as well,
+        // for the side-by-side. The generated assets live in
+        // Assets/PS2BakedLightCheck for the duration and are deleted
+        // afterwards.
+        public static void ExportBakedLightScene()
+        {
+            string output = "bakedlight.p2b";
+            string realtimeOutput = null;
+            string[] args = System.Environment.GetCommandLineArgs();
+            for (int i = 0; i < args.Length - 1; i++)
+            {
+                if (args[i] == "-ps2Output")
+                {
+                    output = args[i + 1];
+                }
+                if (args[i] == "-ps2RealtimeOutput")
+                {
+                    realtimeOutput = args[i + 1];
+                }
+            }
+
+            const string folder = "Assets/PS2BakedLightCheck";
+            var scene = EditorSceneManager.NewScene(NewSceneSetup.EmptyScene,
+                                                    NewSceneMode.Single);
+            if (!AssetDatabase.IsValidFolder(folder))
+                AssetDatabase.CreateFolder("Assets", "PS2BakedLightCheck");
+            EditorSceneManager.SaveScene(scene, folder + "/bakedlight.unity");
+
+            RenderSettings.ambientMode = UnityEngine.Rendering.AmbientMode.Flat;
+            RenderSettings.ambientLight = new Color(0.08f, 0.08f, 0.10f, 1f);
+            RenderSettings.fog = false;
+
+            var camGo = new GameObject("Camera");
+            var cam = camGo.AddComponent<Camera>();
+            cam.fieldOfView = 60.0f;
+            cam.nearClipPlane = 0.5f;
+            cam.farClipPlane = 100.0f;
+            cam.backgroundColor = new Color(0.05f, 0.05f, 0.08f, 1f);
+            camGo.transform.position = new Vector3(0f, 14f, -16f);
+            camGo.transform.LookAt(new Vector3(0f, 0f, 2f));
+
+            var lightGo = new GameObject("Sun");
+            var light = lightGo.AddComponent<Light>();
+            light.type = LightType.Directional;
+            light.color = Color.white;
+            light.intensity = 1.2f;
+            light.lightmapBakeType = LightmapBakeType.Baked;
+            light.shadows = LightShadows.Hard;
+            // From behind the wall towards the camera, so the shadow falls
+            // across the floor in view rather than behind the wall.
+            lightGo.transform.rotation = Quaternion.Euler(40.0f, 200.0f, 0);
+
+            Shader shader = Shader.Find("Standard");
+            if (shader == null) shader = Shader.Find("Universal Render Pipeline/Lit");
+            var floorMat = new Material(shader);
+            floorMat.color = new Color(0.85f, 0.85f, 0.8f, 1f);
+            AssetDatabase.CreateAsset(floorMat, folder + "/floor.mat");
+            var wallMat = new Material(shader);
+            wallMat.color = new Color(0.8f, 0.45f, 0.3f, 1f);
+            AssetDatabase.CreateAsset(wallMat, folder + "/wall.mat");
+
+            var floor = GameObject.CreatePrimitive(PrimitiveType.Plane);
+            floor.name = "floor";
+            floor.transform.localScale = new Vector3(2.4f, 1f, 2.4f); // 24 units
+            floor.GetComponent<MeshRenderer>().sharedMaterial = floorMat;
+            GameObjectUtility.SetStaticEditorFlags(floor, StaticEditorFlags.ContributeGI);
+
+            var wall = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            wall.name = "wall";
+            wall.transform.position = new Vector3(-2f, 2.5f, 3f);
+            wall.transform.localScale = new Vector3(8f, 5f, 0.5f);
+            wall.GetComponent<MeshRenderer>().sharedMaterial = wallMat;
+            GameObjectUtility.SetStaticEditorFlags(wall, StaticEditorFlags.ContributeGI);
+
+            var ball = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+            ball.name = "dynamic-sphere";
+            ball.transform.position = new Vector3(6f, 1.5f, -2f);
+            ball.transform.localScale = Vector3.one * 3f;
+            ball.GetComponent<MeshRenderer>().sharedMaterial = wallMat;
+
+            var settings = new LightingSettings();
+            settings.name = "bakedlight-settings";
+            settings.lightmapper = LightingSettings.Lightmapper.ProgressiveCPU;
+            settings.realtimeGI = false;
+            settings.bakedGI = true;
+            settings.lightmapResolution = 6f;
+            settings.lightmapMaxSize = 256;
+            settings.directSampleCount = 16;
+            settings.indirectSampleCount = 32;
+            settings.environmentSampleCount = 16;
+            settings.maxBounces = 1;
+            settings.ao = false;
+            settings.lightmapCompression = LightmapCompression.None;
+            AssetDatabase.CreateAsset(settings, folder + "/bakedlight.lighting");
+            Lightmapping.lightingSettings = settings;
+            EditorSceneManager.SaveScene(scene);
+
+            bool baked = Lightmapping.Bake();
+            int maps = LightmapSettings.lightmaps.Length;
+            Debug.Log("[PS2] baked light check: Bake() " + (baked ? "ok" : "FAILED") +
+                      ", " + maps + " lightmap(s), floor lightmapIndex " +
+                      floor.GetComponent<MeshRenderer>().lightmapIndex);
+
+            int previousMode = P2bSceneExporter.LightingMode;
+            P2bSceneExporter.LightingMode = 1;
+            P2bSceneExporter.BakedVertexSpacing = 1.0f;
+            P2bSceneExporter.ExportActiveScene(output);
+            Debug.Log("[PS2] baked light scene exported to " + output);
+            if (!string.IsNullOrEmpty(realtimeOutput))
+            {
+                P2bSceneExporter.LightingMode = 0;
+                P2bSceneExporter.ExportActiveScene(realtimeOutput);
+                Debug.Log("[PS2] realtime twin exported to " + realtimeOutput);
+            }
+            P2bSceneExporter.LightingMode = previousMode;
+
+            EditorSceneManager.NewScene(NewSceneSetup.EmptyScene, NewSceneMode.Single);
+            AssetDatabase.DeleteAsset(folder);
+        }
+
+        // ---- ADR-013: TextMeshPro verification scene -------------------------
+        //
+        //   Unity -batchmode -quit -executeMethod Ps2.Editor.PS2ExportMenu.ExportTmpScene -ps2Output <scene.p2b>
+        //
+        // A canvas with a TextMeshProUGUI (centred, bold, rich-text markup
+        // that must be stripped), a plain uGUI Text beside it, and a camera.
+        // TMP's own font-asset creation refuses Unity's builtin font, so the
+        // component has no font asset here and the export's default-font
+        // fallback is what bakes; a real project resolves its font assets'
+        // source TTFs through the same code.
+        public static void ExportTmpScene()
+        {
+            string output = "tmpscene.p2b";
+            string[] args = System.Environment.GetCommandLineArgs();
+            for (int i = 0; i < args.Length - 1; i++)
+            {
+                if (args[i] == "-ps2Output")
+                {
+                    output = args[i + 1];
+                }
+            }
+#if PS2_HAS_TMP
+            EditorSceneManager.NewScene(NewSceneSetup.EmptyScene, NewSceneMode.Single);
+
+            var camGo = new GameObject("Camera");
+            var cam = camGo.AddComponent<Camera>();
+            cam.backgroundColor = new Color(0.1f, 0.1f, 0.25f, 1f);
+            cam.clearFlags = CameraClearFlags.SolidColor;
+
+            var canvasGo = new GameObject("Canvas", typeof(RectTransform));
+            var canvas = canvasGo.AddComponent<Canvas>();
+            canvas.renderMode = RenderMode.ScreenSpaceOverlay;
+
+            Font builtin = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
+            TMPro.TMP_FontAsset fontAsset = TMPro.TMP_FontAsset.CreateFontAsset(builtin);
+
+            var tmpGo = new GameObject("Title", typeof(RectTransform));
+            tmpGo.transform.SetParent(canvasGo.transform, false);
+            var rt = (RectTransform)tmpGo.transform;
+            rt.anchorMin = new Vector2(0f, 0.55f);
+            rt.anchorMax = new Vector2(1f, 0.85f);
+            rt.offsetMin = Vector2.zero;
+            rt.offsetMax = Vector2.zero;
+            var tmp = tmpGo.AddComponent<TMPro.TextMeshProUGUI>();
+            tmp.font = fontAsset;
+            tmp.text = "<b>PRESS</b> <color=#ff0>START</color>";
+            tmp.fontSize = 40;
+            tmp.fontStyle = TMPro.FontStyles.Bold;
+            tmp.alignment = TMPro.TextAlignmentOptions.Center;
+            tmp.color = new Color(1f, 0.9f, 0.5f, 1f);
+
+            var textGo = new GameObject("Caption", typeof(RectTransform));
+            textGo.transform.SetParent(canvasGo.transform, false);
+            var rt2 = (RectTransform)textGo.transform;
+            rt2.anchorMin = new Vector2(0f, 0.2f);
+            rt2.anchorMax = new Vector2(1f, 0.4f);
+            rt2.offsetMin = Vector2.zero;
+            rt2.offsetMax = Vector2.zero;
+            var text = textGo.AddComponent<UnityEngine.UI.Text>();
+            text.font = builtin;
+            text.text = "uGUI Text, italic";
+            text.fontSize = 22;
+            text.fontStyle = FontStyle.Italic;
+            text.alignment = TextAnchor.MiddleCenter;
+            text.color = Color.white;
+
+            P2bSceneExporter.ExportActiveScene(output);
+            Debug.Log("[PS2] TextMeshPro scene exported to " + output);
+#else
+            Debug.LogError("[PS2] TextMeshPro is not available in this project " +
+                           "(com.unity.ugui 2.0 or com.unity.textmeshpro).");
+#endif
         }
 
         private static System.Type FindUserType(string name)
